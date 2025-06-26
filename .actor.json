@@ -1,0 +1,12 @@
+{
+    "actorSpecification": 1,
+    "name": "twitch-clip-downloader",
+    "version": "1.0.0",
+    "buildTag": "latest",
+    "environmentVariables": {},
+    "defaultRunOptions": {
+        "build": "latest",
+        "memoryMbytes": 1024,
+        "timeoutSecs": 300
+    }
+}
