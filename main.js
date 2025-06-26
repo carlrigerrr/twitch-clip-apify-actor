@@ -1,4 +1,4 @@
-// Twitch Clip Downloader - Apify Actor
+// Twitch Clip Downloader - Apify Actor (Fixed)
 import { Actor } from 'apify';
 import { PuppeteerCrawler } from 'crawlee';
 
@@ -40,8 +40,8 @@ const crawler = new PuppeteerCrawler({
                 }
             });
             
-            // Wait for page to fully load
-            await page.waitForTimeout(3000);
+            // Wait for page to fully load (using setTimeout instead of waitForTimeout)
+            await new Promise(resolve => setTimeout(resolve, 3000));
             
             // Try to extract video info from the page
             const pageData = await page.evaluate(() => {
@@ -75,7 +75,8 @@ const crawler = new PuppeteerCrawler({
             if (pageData.videoUrl && pageData.videoUrl.startsWith('blob:')) {
                 console.log('Got blob URL, reloading to catch network requests...');
                 await page.reload({ waitUntil: 'networkidle2' });
-                await page.waitForTimeout(5000);
+                // Wait for video to load (using setTimeout instead of waitForTimeout)
+                await new Promise(resolve => setTimeout(resolve, 5000));
             }
             
             // Find the best video URL
