@@ -1,197 +1,108 @@
-// Twitch Clip Downloader - Memory Optimized
+// Twitch Clip Downloader - HTTP Only (No Browser)
 import { Actor } from 'apify';
-import { PuppeteerCrawler } from 'crawlee';
+import { gotScraping } from 'got-scraping';
 
 await Actor.init();
 
 const input = await Actor.getInput();
 const clipUrl = input.clipUrl;
 
-console.log('Starting Twitch clip downloader...');
+console.log('Starting Twitch clip downloader (HTTP mode)...');
 console.log('Clip URL:', clipUrl);
 
-const crawler = new PuppeteerCrawler({
-    launchContext: {
-        launchOptions: {
-            headless: true,
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-accelerated-2d-canvas',
-                '--disable-gpu',
-                '--window-size=1920,1080',
-                '--single-process',
-                '--no-zygote'
-            ]
+try {
+    // Extract clip ID from URL
+    const clipIdMatch = clipUrl.match(/clip\/([a-zA-Z0-9_-]+)/);
+    if (!clipIdMatch) {
+        throw new Error('Invalid clip URL format');
+    }
+    
+    const clipId = clipIdMatch[1];
+    console.log('Clip ID:', clipId);
+    
+    // Method 1: Try the GQL API directly
+    console.log('Trying GQL API...');
+    
+    const gqlResponse = await gotScraping.post('https://gql.twitch.tv/gql', {
+        json: {
+            operationName: 'VideoAccessToken_Clip',
+            variables: {
+                slug: clipId
+            },
+            extensions: {
+                persistedQuery: {
+                    version: 1,
+                    sha256Hash: '36b89d2507fce29e5ca551df756d27c1cfe079e2609642b4390aa4c35796eb11'
+                }
+            }
+        },
+        headers: {
+            'Client-ID': 'kimne78kx3ncx6brgo4mv6wki5h1ko'
         }
-    },
+    });
     
-    navigationTimeoutSecs: 60,
-    requestHandlerTimeoutSecs: 120,
+    const gqlData = JSON.parse(gqlResponse.body);
+    console.log('GQL Response received');
     
-    async requestHandler({ page, request }) {
-        console.log('Opening Twitch clip page...');
+    if (gqlData.data && gqlData.data.clip && gqlData.data.clip.videoQualities) {
+        const qualities = gqlData.data.clip.videoQualities;
+        console.log(`Found ${qualities.length} video qualities`);
         
-        try {
-            // Block unnecessary resources to save memory
-            await page.setRequestInterception(true);
-            
-            const blockedResources = ['image', 'stylesheet', 'font'];
-            page.on('request', (request) => {
-                if (blockedResources.includes(request.resourceType())) {
-                    request.abort();
-                } else {
-                    request.continue();
-                }
-            });
-            
-            // Set up network interception for video URLs
-            const videoUrls = [];
-            page.on('response', response => {
-                const url = response.url();
-                if (url.includes('.mp4') || url.includes('video-edge') || url.includes('v1/segment')) {
-                    videoUrls.push(url);
-                    console.log('Found video URL:', url.substring(0, 80) + '...');
-                }
-            });
-            
-            // Navigate with longer timeout
-            console.log('Navigating to page...');
-            await page.goto(clipUrl, { 
-                waitUntil: 'domcontentloaded',
-                timeout: 60000 
-            });
-            
-            // Wait for video element
-            console.log('Waiting for video player...');
-            await page.waitForSelector('video', { timeout: 30000 });
-            console.log('Video player found!');
-            
-            // Small delay to let video URL load
-            await new Promise(resolve => setTimeout(resolve, 3000));
-            
-            // Extract page data
-            const pageData = await page.evaluate(() => {
-                const video = document.querySelector('video');
-                const videoUrl = video ? video.src : null;
-                
-                // Get title
-                let title = 'Unknown Title';
-                const titleSelectors = [
-                    'h2[data-a-target="stream-title"]',
-                    'h2',
-                    '[class*="title"]'
-                ];
-                
-                for (const selector of titleSelectors) {
-                    const el = document.querySelector(selector);
-                    if (el && el.textContent) {
-                        title = el.textContent.trim();
-                        break;
-                    }
-                }
-                
-                // Get creator
-                let creator = 'Unknown Creator';
-                const creatorSelectors = [
-                    '[data-a-target="stream-info-card-channel-link"]',
-                    'a[href*="/videos"]',
-                    '[class*="channel"] a'
-                ];
-                
-                for (const selector of creatorSelectors) {
-                    const el = document.querySelector(selector);
-                    if (el && el.textContent) {
-                        creator = el.textContent.trim();
-                        break;
-                    }
-                }
-                
-                return { videoUrl, title, creator };
-            });
-            
-            // Process video URLs
-            let finalVideoUrl = pageData.videoUrl;
-            
-            // If we have intercepted URLs, use the best one
-            if (videoUrls.length > 0) {
-                console.log(`Found ${videoUrls.length} potential video URLs`);
-                
-                // Prefer .mp4 URLs
-                const mp4Urls = videoUrls.filter(url => url.includes('.mp4'));
-                if (mp4Urls.length > 0) {
-                    // Sort by length (longer = more likely to have auth tokens)
-                    mp4Urls.sort((a, b) => b.length - a.length);
-                    finalVideoUrl = mp4Urls[0];
-                } else if (videoUrls.length > 0) {
-                    // Use any video URL we found
-                    finalVideoUrl = videoUrls[videoUrls.length - 1];
-                }
-            }
-            
-            // If still blob URL, try one more approach
-            if (finalVideoUrl && finalVideoUrl.startsWith('blob:')) {
-                console.log('Got blob URL, trying alternate method...');
-                
-                // Clear previous URLs
-                videoUrls.length = 0;
-                
-                // Reload and wait
-                await page.reload({ waitUntil: 'domcontentloaded' });
-                await new Promise(resolve => setTimeout(resolve, 5000));
-                
-                // Check if we got new URLs
-                if (videoUrls.length > 0) {
-                    const mp4Urls = videoUrls.filter(url => url.includes('.mp4'));
-                    if (mp4Urls.length > 0) {
-                        finalVideoUrl = mp4Urls[0];
-                    } else {
-                        finalVideoUrl = videoUrls[0];
-                    }
-                }
-            }
-            
-            // Validate final URL
-            if (!finalVideoUrl || finalVideoUrl.startsWith('blob:')) {
-                throw new Error('Could not extract valid video URL');
-            }
-            
-            // Success!
-            const result = {
+        // Get the best quality
+        const bestQuality = qualities.find(q => q.quality === '1080') || 
+                           qualities.find(q => q.quality === '720') || 
+                           qualities[0];
+        
+        if (bestQuality && bestQuality.sourceURL) {
+            await Actor.pushData({
                 success: true,
                 clipUrl: clipUrl,
-                videoUrl: finalVideoUrl,
-                title: pageData.title,
-                creator: pageData.creator,
-                timestamp: new Date().toISOString()
-            };
-            
-            console.log('Success! Extracted video URL');
-            console.log('Title:', result.title);
-            console.log('Creator:', result.creator);
-            console.log('Video URL:', result.videoUrl.substring(0, 100) + '...');
-            
-            await Actor.pushData(result);
-            
-        } catch (error) {
-            console.error('Error:', error.message);
-            
-            await Actor.pushData({
-                success: false,
-                clipUrl: clipUrl,
-                error: error.message,
+                videoUrl: bestQuality.sourceURL,
+                quality: bestQuality.quality,
+                title: gqlData.data.clip.title || 'Unknown',
+                creator: gqlData.data.clip.broadcaster?.displayName || 'Unknown',
+                method: 'gql',
                 timestamp: new Date().toISOString()
             });
+            
+            console.log('Success! Found video URL via GQL');
+            await Actor.exit();
+            return;
         }
-    },
+    }
     
-    maxRequestRetries: 2,
-    maxConcurrency: 1,
-});
-
-// Run the crawler
-await crawler.run([clipUrl]);
+    // Method 2: Try alternative API
+    console.log('GQL failed, trying alternative method...');
+    
+    const clipPageResponse = await gotScraping(clipUrl);
+    const pageHtml = clipPageResponse.body;
+    
+    // Look for video URL in page source
+    const videoUrlMatch = pageHtml.match(/https:\/\/[^"]+\.mp4[^"]*/);
+    if (videoUrlMatch) {
+        await Actor.pushData({
+            success: true,
+            clipUrl: clipUrl,
+            videoUrl: videoUrlMatch[0],
+            method: 'page_source',
+            timestamp: new Date().toISOString()
+        });
+        
+        console.log('Success! Found video URL in page source');
+    } else {
+        throw new Error('Could not find video URL with any method');
+    }
+    
+} catch (error) {
+    console.error('Error:', error.message);
+    
+    await Actor.pushData({
+        success: false,
+        clipUrl: clipUrl,
+        error: error.message,
+        timestamp: new Date().toISOString()
+    });
+}
 
 console.log('Actor finished!');
 await Actor.exit();
