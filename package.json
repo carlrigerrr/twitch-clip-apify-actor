@@ -9,7 +9,7 @@
     },
     "dependencies": {
         "apify": "^3.1.0",
-        "crawlee": "^3.5.0"
+        "got-scraping": "^3.2.0"
     },
     "author": "Your Name",
     "license": "ISC"
